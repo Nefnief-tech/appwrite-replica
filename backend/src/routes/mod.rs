@@ -1,0 +1,183 @@
+pub mod account;
+pub mod admin;
+pub mod databases;
+pub mod documents;
+pub mod health;
+pub mod import;
+pub mod users;
+
+use axum::{
+    Router,
+    routing::{delete, get, patch, post},
+};
+
+use crate::auth::AppState;
+
+pub fn api_router() -> Router<AppState> {
+    Router::new()
+        .route("/", get(health::root))
+        .route("/version", get(health::version))
+        .route("/v1/health", get(health::health))
+        .route("/v1/health/version", get(health::version))
+        .route("/v1/account", get(account::get_account))
+        .route("/v1/account", post(account::create_account))
+        .route("/v1/account/name", patch(account::update_name))
+        .route("/v1/account/password", patch(account::update_password))
+        .route("/v1/account/prefs", get(account::get_prefs))
+        .route("/v1/account/prefs", patch(account::update_prefs))
+        .route("/v1/account/sessions", get(account::list_sessions))
+        .route("/v1/account/sessions", delete(account::delete_sessions))
+        .route("/v1/account/sessions/email", post(account::login))
+        .route(
+            "/v1/account/sessions/{session_id}",
+            get(account::get_session),
+        )
+        .route(
+            "/v1/account/sessions/{session_id}",
+            delete(account::delete_session),
+        )
+        .route("/v1/users", get(users::list_users))
+        .route("/v1/users", post(users::create_user))
+        .route("/v1/users/{user_id}", get(users::get_user))
+        .route("/v1/users/{user_id}", delete(users::delete_user))
+        .route("/v1/databases", get(databases::list_databases))
+        .route("/v1/databases", post(databases::create_database))
+        .route("/v1/databases/{database_id}", get(databases::get_database))
+        .route(
+            "/v1/databases/{database_id}",
+            delete(databases::delete_database),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections",
+            get(databases::list_collections),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections",
+            post(databases::create_collection),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}",
+            get(databases::get_collection),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}",
+            delete(databases::delete_collection),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/attributes/{kind}",
+            post(databases::create_attribute),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/attributes/{kind}",
+            delete(databases::delete_attribute),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/documents",
+            get(documents::list),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/documents",
+            post(documents::create),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            get(documents::get),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            patch(documents::update),
+        )
+        .route(
+            "/v1/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            delete(documents::delete),
+        )
+}
+
+pub fn admin_router() -> Router<AppState> {
+    Router::new()
+        .route("/login", post(admin::login))
+        .route("/logout", post(admin::logout))
+        .route("/me", get(admin::me))
+        .route("/overview", get(admin::overview))
+        .route("/nodes", get(admin::list_nodes))
+        .route("/nodes", post(admin::add_node))
+        .route("/nodes/{node_id}", delete(admin::remove_node))
+        .route("/nodes/{node_id}/check", post(admin::check_node))
+        .route("/nodes/{node_id}/promote", post(admin::promote_node))
+        .route("/projects", get(admin::list_projects))
+        .route("/projects", post(admin::create_project))
+        .route("/projects/{project_id}", get(admin::get_project))
+        .route("/projects/{project_id}", delete(admin::delete_project))
+        .route("/projects/{project_id}/key", post(admin::rotate_key))
+        .route("/projects/{project_id}/users", get(admin::list_users))
+        .route("/projects/{project_id}/users", post(admin::create_user))
+        .route(
+            "/projects/{project_id}/users/{user_id}",
+            patch(admin::update_user),
+        )
+        .route(
+            "/projects/{project_id}/users/{user_id}",
+            delete(admin::delete_user),
+        )
+        .route(
+            "/projects/{project_id}/databases",
+            get(admin::list_databases),
+        )
+        .route(
+            "/projects/{project_id}/databases",
+            post(admin::create_database),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}",
+            delete(admin::delete_database),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections",
+            get(admin::list_collections),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections",
+            post(admin::create_collection),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}",
+            get(admin::get_collection),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}",
+            patch(admin::update_collection),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}",
+            delete(admin::delete_collection),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/attributes/{kind}",
+            post(admin::create_attribute),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/attributes/{kind}",
+            delete(admin::delete_attribute),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/documents",
+            get(admin::list_documents),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/documents",
+            post(admin::create_document),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            get(admin::get_document),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            patch(admin::update_document),
+        )
+        .route(
+            "/projects/{project_id}/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
+            delete(admin::delete_document),
+        )
+        .route("/import", post(import::import_project))
+}
