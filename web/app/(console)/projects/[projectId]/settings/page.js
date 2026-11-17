@@ -73,7 +73,7 @@ export default function ProjectSettingsPage() {
       <PageHead
         eyebrow="Project"
         title="Settings"
-        description="Connection details, key rotation and destructive actions."
+        description="Connection details, key rotation and destructive actions"
       />
 
       <ProjectTabs projectId={projectId} />
@@ -141,8 +141,8 @@ export default function ProjectSettingsPage() {
           </div>
         </section>
 
-        <section className="panel" style={{ borderColor: "#d9b6ac" }}>
-          <div className="panel-head" style={{ borderColor: "#e4cfc9" }}>
+        <section className="panel" style={{ borderColor: "var(--danger-soft)" }}>
+          <div className="panel-head" style={{ borderColor: "var(--danger-soft)" }}>
             <h2 style={{ color: "var(--danger)" }}>Danger zone</h2>
           </div>
           <div className="panel-body">
@@ -172,7 +172,7 @@ export default function ProjectSettingsPage() {
       {rotateOpen ? (
         <Modal
           title="Rotate API key?"
-          subtitle="Server integrations using the old key will fail."
+          subtitle="Server integrations using the old key will fail"
           onClose={() => setRotateOpen(false)}
           footer={
             <>
@@ -195,7 +195,7 @@ export default function ProjectSettingsPage() {
       {newKey ? (
         <Modal
           title="New API key"
-          subtitle="Store it now — this is the only time it is shown."
+          subtitle="Store it now — this is the only time it is shown"
           onClose={() => setNewKey(null)}
           footer={
             <button className="btn btn-primary" onClick={() => setNewKey(null)}>

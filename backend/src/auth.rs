@@ -132,6 +132,14 @@ pub fn request_session_token(headers: &axum::http::HeaderMap, project_id: &str) 
         return Some(value.to_string());
     }
     if let Some(value) = headers
+        .get("x-appwrite-jwt")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return Some(value.to_string());
+    }
+    if let Some(value) = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))

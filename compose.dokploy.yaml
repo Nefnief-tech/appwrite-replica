@@ -1,0 +1,166 @@
+# Dokploy deployment: create a "Compose" service and point its Compose Path
+# at this file. Set the variables in the service's Environment tab, deploy,
+# then add a domain for the `web` service on port 3000 in the Domains tab.
+# See docs/dokploy.md.
+
+name: openwrite
+
+services:
+  postgres-primary:
+    restart: unless-stopped
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openwrite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-openwrite}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?set REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - wal_keep_size=128MB
+    volumes:
+      - pg-primary:/var/lib/postgresql/data
+      - ./deploy/init-replication.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openwrite} -d ${POSTGRES_DB:-openwrite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - dokploy-network
+
+  postgres-replica-1:
+    restart: unless-stopped
+    image: postgres:17-alpine
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openwrite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-openwrite}
+      PGPASSWORD: ${REPLICATION_PASSWORD:?set REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    volumes:
+      - pg-replica-1:/var/lib/postgresql/data
+      - ./deploy/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openwrite} -d ${POSTGRES_DB:-openwrite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - dokploy-network
+
+  postgres-replica-2:
+    restart: unless-stopped
+    image: postgres:17-alpine
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openwrite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-openwrite}
+      PGPASSWORD: ${REPLICATION_PASSWORD:?set REPLICATION_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    volumes:
+      - pg-replica-2:/var/lib/postgresql/data
+      - ./deploy/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openwrite} -d ${POSTGRES_DB:-openwrite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - dokploy-network
+
+  redis:
+    restart: unless-stopped
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - dokploy-network
+
+  api:
+    restart: unless-stopped
+    build:
+      context: ./backend
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres-replica-1:
+        condition: service_healthy
+      postgres-replica-2:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-openwrite}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres-primary:5432/${POSTGRES_DB:-openwrite}
+      DATABASE_FOLLOWERS: postgres://${POSTGRES_USER:-openwrite}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres-replica-1:5432/${POSTGRES_DB:-openwrite},postgres://${POSTGRES_USER:-openwrite}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres-replica-2:5432/${POSTGRES_DB:-openwrite}
+      REDIS_URL: redis://redis:6379
+      BIND_ADDR: 0.0.0.0:8080
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL to your https://domain}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      NODE_SECRET: ${NODE_SECRET:?set NODE_SECRET}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@openwrite.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      READ_ROUTING: ${READ_ROUTING:-replica}
+      DOCKER_REPLICA_MODE: network
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-dokploy-network}
+      RUST_LOG: openwrite_api=info,tower_http=warn
+    volumes:
+      - api-data:/data
+      # Console-admin-only feature: spawning replicas needs Docker Engine access.
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/v1/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      - dokploy-network
+
+  web:
+    restart: unless-stopped
+    build:
+      context: ./web
+      args:
+        OPENWRITE_API: http://api:8080
+    depends_on:
+      - api
+    networks:
+      - dokploy-network
+
+volumes:
+  pg-primary:
+  pg-replica-1:
+  pg-replica-2:
+  redis-data:
+  api-data:
+
+networks:
+  dokploy-network:
+    external: true

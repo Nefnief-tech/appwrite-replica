@@ -294,7 +294,7 @@ export default function UsersPage() {
       {createOpen ? (
         <Modal
           title="Create user"
-          subtitle="The account can sign in immediately if a password is set."
+          subtitle="The account can sign in immediately if a password is set"
           onClose={() => setCreateOpen(false)}
           footer={
             <>

@@ -318,13 +318,13 @@ export default function CollectionPage() {
           <div className="panel-body">
             <p className="small subtle" style={{ marginTop: 0 }}>
               {data.documentSecurity
-                ? "Reads are filtered by each document's own read permissions; creating still requires the collection create permission."
-                : "Everyone allowed by the collection permissions can read every document in this collection."}
+                ? "Reads are filtered by each document's own read permissions; creating still requires the collection create permission"
+                : "Everyone allowed by the collection permissions can read every document in this collection"}
             </p>
             <div className="divider" />
             <div className="stack-tight">
               {(data.$permissions || []).length === 0 ? (
-                <span className="small subtle">No collection permissions set.</span>
+                <span className="small subtle">No collection permissions set</span>
               ) : (
                 data.$permissions.map((permission) => (
                   <span key={permission} className="mono" style={{ color: "var(--ink-soft)" }}>
@@ -439,7 +439,7 @@ export default function CollectionPage() {
       {attributeOpen ? (
         <Modal
           title="Add attribute"
-          subtitle="Existing documents are not rewritten; new values are validated on write."
+          subtitle="Existing documents are not rewritten; new values are validated on write"
           onClose={() => setAttributeOpen(false)}
           footer={
             <>
@@ -506,7 +506,7 @@ export default function CollectionPage() {
 
             <div className="form-row">
               {textType ? (
-                <Field label="Max size" hint="Characters for strings." htmlFor="attr-size">
+                <Field label="Max size" hint="Characters for strings" htmlFor="attr-size">
                   <input
                     id="attr-size"
                     className="input"
@@ -630,7 +630,7 @@ export default function CollectionPage() {
             ) : null}
             <Field
               label="Data (JSON)"
-              hint="Only attributes defined on this collection are accepted."
+              hint="Only attributes defined on this collection are accepted"
               htmlFor="doc-json"
             >
               <textarea

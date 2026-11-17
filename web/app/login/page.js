@@ -37,7 +37,7 @@ export default function LoginPage() {
         </div>
 
         <div className="login-copy">
-          <p className="eyebrow" style={{ color: "var(--acid)" }}>
+          <p className="eyebrow" style={{ color: "var(--accent)" }}>
             Self-hosted · Appwrite compatible
           </p>
           <h1>
@@ -63,7 +63,7 @@ export default function LoginPage() {
         <form className="login-form" onSubmit={submit}>
           <p className="eyebrow">Admin access</p>
           <h2>Sign in</h2>
-          <p className="subtle">Use the admin credentials configured on the API.</p>
+          <p className="subtle">Use the admin credentials configured on the API</p>
 
           <Field label="Email" htmlFor="email">
             <input

@@ -128,7 +128,7 @@ export default function DatabasePage() {
       <PageHead
         eyebrow="Database"
         title={database?.name || databaseId}
-        description={`Schema ow_${projectId}_${databaseId} · collections become plain PostgreSQL tables.`}
+        description={`Schema ow_${projectId}_${databaseId} · collections become plain PostgreSQL tables`}
         actions={
           <button className="btn btn-primary" onClick={() => setOpen(true)}>
             <Icon name="plus" size={14} />
@@ -158,7 +158,7 @@ export default function DatabasePage() {
               </button>
             }
           >
-            Collections define attributes and create a real table with JSONB document data.
+            Collections define attributes and create a real table with JSONB document data
           </Empty>
         ) : (
           <div className="list">

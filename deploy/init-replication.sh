@@ -5,4 +5,6 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-E
   create role replicator with replication login password '$REPLICATION_PASSWORD';
 EOSQL
 
-echo "host replication replicator all scram-sha-256" >> "$PGDATA/pg_hba.conf"
+# Both the fixed replicas (replicator) and console-spawned replicas
+# (leader DSN user) need replication access from the Docker network.
+echo "host replication all all scram-sha-256" >> "$PGDATA/pg_hba.conf"

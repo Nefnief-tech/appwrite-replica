@@ -1,9 +1,11 @@
 pub mod account;
 pub mod admin;
 pub mod databases;
+pub mod docker;
 pub mod documents;
 pub mod health;
 pub mod import;
+pub mod tablesdb;
 pub mod users;
 
 use axum::{
@@ -11,14 +13,17 @@ use axum::{
     routing::{delete, get, patch, post},
 };
 
+use crate::realtime;
+
 use crate::auth::AppState;
 
 pub fn api_router() -> Router<AppState> {
-    Router::new()
-        .route("/", get(health::root))
+    Router::new()        .route("/", get(health::root))
         .route("/version", get(health::version))
         .route("/v1/health", get(health::health))
         .route("/v1/health/version", get(health::version))
+        .route("/v1/ping", get(health::ping))
+        .route("/v1/realtime", get(realtime::realtime))
         .route("/v1/account", get(account::get_account))
         .route("/v1/account", post(account::create_account))
         .route("/v1/account/name", patch(account::update_name))
@@ -28,6 +33,7 @@ pub fn api_router() -> Router<AppState> {
         .route("/v1/account/sessions", get(account::list_sessions))
         .route("/v1/account/sessions", delete(account::delete_sessions))
         .route("/v1/account/sessions/email", post(account::login))
+        .route("/v1/account/jwts", post(account::create_jwt))
         .route(
             "/v1/account/sessions/{session_id}",
             get(account::get_session),
@@ -91,6 +97,7 @@ pub fn api_router() -> Router<AppState> {
             "/v1/databases/{database_id}/collections/{collection_id}/documents/{document_id}",
             delete(documents::delete),
         )
+        .merge(tablesdb::router())
 }
 
 pub fn admin_router() -> Router<AppState> {
@@ -99,11 +106,15 @@ pub fn admin_router() -> Router<AppState> {
         .route("/logout", post(admin::logout))
         .route("/me", get(admin::me))
         .route("/overview", get(admin::overview))
+        .route("/usage", get(admin::usage))
         .route("/nodes", get(admin::list_nodes))
         .route("/nodes", post(admin::add_node))
         .route("/nodes/{node_id}", delete(admin::remove_node))
         .route("/nodes/{node_id}/check", post(admin::check_node))
         .route("/nodes/{node_id}/promote", post(admin::promote_node))
+        .route("/docker/status", get(docker::status))
+        .route("/docker/replicas", post(docker::spawn_replica))
+        .route("/docker/replicas/{node_id}", delete(docker::remove_replica))
         .route("/projects", get(admin::list_projects))
         .route("/projects", post(admin::create_project))
         .route("/projects/{project_id}", get(admin::get_project))

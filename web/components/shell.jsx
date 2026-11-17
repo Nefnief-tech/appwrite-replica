@@ -10,8 +10,10 @@ import { Icon, Spinner } from "./ui";
 const NAV = [
   { href: "/", label: "Overview", icon: "overview" },
   { href: "/projects", label: "Projects", icon: "projects" },
+  { href: "/usage", label: "Usage", icon: "usage" },
   { href: "/nodes", label: "Nodes", icon: "nodes" },
   { href: "/import", label: "Import", icon: "import" },
+  { href: "/design", label: "Design", icon: "code" },
 ];
 
 function active(pathname, href) {

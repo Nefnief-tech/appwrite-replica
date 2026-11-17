@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import NodeGraph from "@/components/node-graph";
 import { api, formatRelative } from "@/lib/api";
 import { useApi, useToast } from "@/lib/hooks";
 import {
@@ -27,6 +28,17 @@ function lagLabel(status) {
 export default function NodesPage() {
   const { data, loading, error, reload } = useApi("/nodes");
   const { toast, notify } = useToast();
+
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [docker, setDocker] = useState(null);
+  const [spawnOpen, setSpawnOpen] = useState(false);
+  const [spawnName, setSpawnName] = useState("");
+  const [spawnBusy, setSpawnBusy] = useState(false);
+  const [spawnError, setSpawnError] = useState("");
+
+  useEffect(() => {
+    api("/docker/status").then(setDocker).catch(() => setDocker({ available: false }));
+  }, []);
 
   const [addOpen, setAddOpen] = useState(false);
   const [name, setName] = useState("");
@@ -57,6 +69,26 @@ export default function NodesPage() {
       setFormError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function spawnReplica(event) {
+    event.preventDefault();
+    setSpawnBusy(true);
+    setSpawnError("");
+    try {
+      await api("/docker/replicas", {
+        method: "POST",
+        body: { name: spawnName || undefined },
+      });
+      setSpawnOpen(false);
+      setSpawnName("");
+      reload();
+      notify("Replica started and registered");
+    } catch (err) {
+      setSpawnError(err.message);
+    } finally {
+      setSpawnBusy(false);
     }
   }
 
@@ -95,7 +127,10 @@ export default function NodesPage() {
   async function remove() {
     setRemoveBusy(true);
     try {
-      await api(`/nodes/${removing.id}`, { method: "DELETE" });
+      const managed = removing.name.startsWith("ow-replica-");
+      await api(managed ? `/docker/replicas/${removing.id}` : `/nodes/${removing.id}`, {
+        method: "DELETE",
+      });
       setRemoving(null);
       reload();
       notify("Node removed");
@@ -113,14 +148,35 @@ export default function NodesPage() {
         title="Nodes"
         description="One Postgres leader takes writes; followers stream from it. Openwrite routes reads to the leader unless READ_ROUTING is set to replica."
         actions={
-          <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
-            <Icon name="plus" size={14} />
-            Register node
-          </button>
+          <>
+            <button
+              className="btn btn-primary"
+              onClick={() => setSpawnOpen(true)}
+              disabled={docker?.available === false}
+              title={docker?.available === false ? docker.error || "Docker unavailable" : undefined}
+            >
+              <Icon name="database" size={14} />
+              Spawn replica
+            </button>
+            <button className="btn" onClick={() => setAddOpen(true)}>
+              <Icon name="plus" size={14} />
+              Register node
+            </button>
+          </>
         }
       />
 
       {error ? <Notice tone="danger">{error.message}</Notice> : null}
+
+      {!loading && data?.nodes?.length ? (
+        <section className="panel" style={{ marginBottom: 18 }}>
+          <div className="panel-head">
+            <h2>Replication topology</h2>
+            <span className="mono">{data.nodes.length} nodes</span>
+          </div>
+          <NodeGraph nodes={data.nodes} selectedId={selectedNode} onSelect={setSelectedNode} />
+        </section>
+      ) : null}
 
       <section className="panel">
         <div className="panel-head">
@@ -141,7 +197,7 @@ export default function NodesPage() {
               </button>
             }
           >
-            On first boot Openwrite registers DATABASE_URL as the leader automatically.
+            On first boot Openwrite registers DATABASE_URL as the leader automatically
           </Empty>
         ) : (
           <div className="table-wrap">
@@ -156,7 +212,7 @@ export default function NodesPage() {
               </thead>
               <tbody>
                 {data.nodes.map((node) => (
-                  <tr key={node.id}>
+                  <tr key={node.id} className={selectedNode === node.id ? "graph-row-selected" : ""}>
                     <td>
                       <span className="row" style={{ gap: 8 }}>
                         <span className={`dot ${node.status?.ok ? "ok" : "fail"}`} />
@@ -178,6 +234,9 @@ export default function NodesPage() {
                           {node.role}
                         </Badge>
                         {node.isWriter ? <Badge tone="ok">writer</Badge> : null}
+                        {node.name.startsWith("ow-replica-") ? (
+                          <Badge tone="acid">docker</Badge>
+                        ) : null}
                       </span>
                     </td>
                     <td>
@@ -236,8 +295,9 @@ export default function NodesPage() {
           <div>
             <h3>1 · Prepare the replica</h3>
             <p className="small subtle" style={{ margin: "4px 0 0" }}>
-              Build followers with pg_basebackup against the current leader. They must be
-              reachable from the API and stream continuously.
+              Use Spawn replica to build a follower with pg_basebackup against the current
+              leader, or register one you prepared yourself. Followers must be reachable
+              from the API and stream continuously.
             </p>
           </div>
           <div>
@@ -257,10 +317,51 @@ export default function NodesPage() {
         </div>
       </section>
 
+      {spawnOpen ? (
+        <Modal
+          title="Spawn Postgres replica"
+          subtitle="Runs on this host's Docker daemon and registers the new node automatically"
+          onClose={() => setSpawnOpen(false)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setSpawnOpen(false)}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" form="new-replica" type="submit" disabled={spawnBusy}>
+                {spawnBusy ? <Spinner dark /> : null}
+                {spawnBusy ? "Starting…" : "Spawn replica"}
+              </button>
+            </>
+          }
+        >
+          <form id="new-replica" className="form-grid" onSubmit={spawnReplica}>
+            <Field
+              label="Replica name (optional)"
+              hint="Container and node are named ow-replica-…; leave empty for a generated name."
+              htmlFor="replica-name"
+            >
+              <input
+                id="replica-name"
+                className="input"
+                autoFocus
+                placeholder="eu-west-1"
+                value={spawnName}
+                onChange={(event) => setSpawnName(event.target.value)}
+              />
+            </Field>
+            <Notice tone="warn">
+              Docker Engine {docker?.version} is available. The API controls Docker through
+              /var/run/docker.sock, so console admins can manage containers on this host.
+            </Notice>
+            {spawnError ? <Notice tone="danger">{spawnError}</Notice> : null}
+          </form>
+        </Modal>
+      ) : null}
+
       {addOpen ? (
         <Modal
           title="Register node"
-          subtitle="DSNs are encrypted with NODE_SECRET before they touch the database."
+          subtitle="DSNs are encrypted with NODE_SECRET before they touch the database"
           wide
           onClose={() => setAddOpen(false)}
           footer={
@@ -302,7 +403,7 @@ export default function NodesPage() {
             </div>
             <Field
               label="PostgreSQL DSN"
-              hint="postgres://user:password@host:5432/openwrite — the target must use the same schema and migrations."
+              hint="postgres://user:password@host:5432/openwrite — the target must use the same schema and migrations"
               htmlFor="node-dsn"
             >
               <input
@@ -328,7 +429,7 @@ export default function NodesPage() {
       {promoting ? (
         <Modal
           title={`Promote ${promoting.name}?`}
-          subtitle="Openwrite will check that this node accepts writes before switching."
+          subtitle="Openwrite will check that this node accepts writes before switching"
           onClose={() => setPromoting(null)}
           footer={
             <>

@@ -17,7 +17,9 @@ import {
 const STAT_LABELS = [
   ["databases", "Databases"],
   ["collections", "Collections"],
+  ["tables", "Tables"],
   ["documents", "Documents"],
+  ["rows", "Rows"],
   ["users", "Users"],
 ];
 
@@ -64,7 +66,7 @@ export default function ImportPage() {
       <PageHead
         eyebrow="Migration"
         title="Import from Appwrite"
-        description="Copy databases, collections, documents and users from Appwrite Cloud or any self-hosted Appwrite into Openwrite."
+        description="Copy databases, collections, tables, documents, rows and users from Appwrite Cloud or any self-hosted Appwrite into Openwrite."
       />
 
       <div className="grid-2">
@@ -90,7 +92,7 @@ export default function ImportPage() {
               </Field>
               <Field
                 label="Appwrite API key"
-                hint="Create a server key with databases, collections, documents and users scopes."
+                hint="Create a server key with databases.read, tables.read, rows.read and users.read scopes (collections.read and documents.read only for Appwrite before 1.8)"
                 htmlFor="import-key"
               >
                 <input
@@ -164,7 +166,7 @@ export default function ImportPage() {
             <div>
               <h3>Start import</h3>
               <p className="small subtle" style={{ margin: "2px 0 0" }}>
-                Existing IDs are skipped, so a failed run can be retried.
+                Existing IDs are skipped, so a failed run can be retried
               </p>
             </div>
             <button className="btn btn-primary" form="import-form" type="submit" disabled={busy}>
@@ -179,12 +181,13 @@ export default function ImportPage() {
             <h2 style={{ fontSize: 21, marginBottom: 10 }}>What is copied</h2>
             <div className="stack-tight small">
               <span>
-                <strong>Databases and collections</strong> — recreated with their IDs and
-                permissions; each becomes a real Postgres schema and table.
+                <strong>Databases, collections and tables</strong> — recreated with their IDs,
+                columns and permissions; each becomes a real Postgres schema and table.
               </span>
               <span>
-                <strong>Documents</strong> — inserted directly with original IDs, JSONB data,
-                ACLs and timestamps. Up to the configured document limit.
+                <strong>Documents and rows</strong> — inserted directly with original IDs, JSONB
+                data, ACLs and timestamps. TablesDB rows and legacy documents both work. Up to
+                the configured document limit.
               </span>
               <span>
                 <strong>Users</strong> — accounts are recreated and marked{" "}

@@ -2,27 +2,29 @@ mod auth;
 mod config;
 mod crypto;
 mod db;
+mod docker;
 mod documents;
 mod error;
 mod models;
 mod nodes;
+mod realtime;
 mod routes;
 mod schema;
 mod store;
+mod usage;
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
-    http::{HeaderValue, Method},
+    extract::{DefaultBodyLimit, Request, State},
+    http::{HeaderValue, Method, StatusCode, header},
+    middleware::Next,
+    response::Response,
 };
 use tokio::sync::RwLock;
-use tower_http::{
-    cors::{AllowOrigin, Any, CorsLayer},
-    trace::TraceLayer,
-};
+use tower_http::trace::TraceLayer;
 
 use crate::{
     auth::AppState,
@@ -73,6 +75,8 @@ async fn main() -> Result<()> {
     let registry = Arc::new(RwLock::new(registry));
     nodes::check_all(&registry).await;
     tokio::spawn(nodes::health_loop(registry.clone()));
+    tokio::spawn(usage::retention_loop(control.clone(), cfg.usage_retention_days));
+    tokio::spawn(realtime::listener_task(control.clone()));
 
     let redis_client =
         redis::Client::open(cfg.redis_url.clone()).context("invalid REDIS_URL")?;
@@ -87,42 +91,85 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(cfg.clone(), registry, redis, http, cipher);
     let app: Router = Router::new()
-        .merge(routes::api_router())
+        .merge(
+            routes::api_router()
+                .layer(axum::middleware::from_fn_with_state(state.clone(), usage::record)),
+        )
         .nest("/admin/api", routes::admin_router())
         .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(TraceLayer::new_for_http())
-        .layer(cors(&cfg))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), cors))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr)
         .await
         .with_context(|| format!("could not bind {}", cfg.bind_addr))?;
     tracing::info!("Openwrite listening on {}", cfg.bind_addr);
-    axum::serve(listener, app)
-        .await
-        .context("server error")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("server error")?;
     Ok(())
 }
 
-fn cors(cfg: &Config) -> CorsLayer {
-    let layer = CorsLayer::new()
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PATCH,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers(Any);
+fn origin_allowed(cfg: &Config, origin: &HeaderValue) -> bool {
+    let Ok(value) = origin.to_str() else {
+        return false;
+    };
     if cfg.cors_origins.is_empty() {
-        return layer.allow_origin(Any);
+        // Development default: reflect any origin so credentialed SDK requests
+        // work out of the box. Set CORS_ORIGINS to restrict this.
+        return true;
     }
-    let origins: Vec<HeaderValue> = cfg
-        .cors_origins
+    cfg.cors_origins
         .iter()
-        .filter_map(|origin| origin.parse().ok())
-        .collect();
-    layer
-        .allow_origin(AllowOrigin::list(origins))
-        .allow_credentials(true)
+        .any(|allowed| allowed.trim_end_matches('/').eq_ignore_ascii_case(value))
+}
+
+/// CORS as a plain middleware: `Allow-Origin: *` cannot carry credentials, so
+/// the caller's origin is reflected instead. Preflights are answered here and
+/// never reach the routes.
+async fn cors(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let preflight = req.method() == Method::OPTIONS
+        && req.headers().contains_key("access-control-request-method");
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .filter(|origin| origin_allowed(&state.cfg(), origin))
+        .cloned();
+    let requested_headers = req
+        .headers()
+        .get("access-control-request-headers")
+        .cloned();
+
+    let mut response = if preflight {
+        Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .body(axum::body::Body::empty())
+            .expect("static preflight response")
+    } else {
+        next.run(req).await
+    };
+
+    if let Some(origin) = origin {
+        let headers = response.headers_mut();
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        headers.insert(
+            header::ACCESS_CONTROL_ALLOW_CREDENTIALS,
+            HeaderValue::from_static("true"),
+        );
+        headers.append(header::VARY, HeaderValue::from_static("Origin"));
+        if preflight {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE, OPTIONS"),
+            );
+            if let Some(requested) = requested_headers {
+                headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, requested);
+            }
+        }
+    }
+    response
 }

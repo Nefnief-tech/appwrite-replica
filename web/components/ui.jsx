@@ -24,6 +24,12 @@ const ICONS = {
       <path d="M7 7.5h.01M7 16.5h.01" />
     </>
   ),
+  usage: (
+    <>
+      <path d="M3 20h18" />
+      <path d="m4 15.5 4.5-6 4 3.5L17 5.5" />
+    </>
+  ),
   import: (
     <>
       <path d="M12 3v12m0 0 4-4m-4 4-4-4" />

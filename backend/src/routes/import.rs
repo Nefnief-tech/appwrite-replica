@@ -2,6 +2,7 @@ use axum::{Json, extract::State};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use sqlx::PgPool;
 
 use crate::{
     auth::{AdminAuth, AppState},
@@ -28,7 +29,7 @@ struct Remote<'a> {
 }
 
 impl Remote<'_> {
-    async fn get(&self, path: &str) -> ApiResult<Value> {
+    async fn fetch(&self, path: &str) -> ApiResult<(reqwest::StatusCode, String)> {
         let url = format!("{}/v1{}", self.base, path);
         let response = self
             .http
@@ -41,6 +42,11 @@ impl Remote<'_> {
             .map_err(|err| ApiError::bad_request(format!("Could not reach Appwrite: {err}")))?;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        Ok((status, body))
+    }
+
+    async fn get(&self, path: &str) -> ApiResult<Value> {
+        let (status, body) = self.fetch(path).await?;
         if !status.is_success() {
             let message = serde_json::from_str::<Value>(&body)
                 .ok()
@@ -52,6 +58,27 @@ impl Remote<'_> {
         }
         serde_json::from_str(&body)
             .map_err(|err| ApiError::bad_request(format!("Appwrite returned invalid JSON: {err}")))
+    }
+
+    /// Some Appwrite versions have no TablesDB API; a 404 means "no tables"
+    /// rather than a broken source project.
+    async fn get_optional(&self, path: &str) -> ApiResult<Option<Value>> {
+        let (status, body) = self.fetch(path).await?;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let message = serde_json::from_str::<Value>(&body)
+                .ok()
+                .and_then(|v| v.get("message").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| body.chars().take(300).collect());
+            return Err(ApiError::bad_request(format!(
+                "Appwrite returned {status}: {message}"
+            )));
+        }
+        serde_json::from_str(&body).map(Some).map_err(|err| {
+            ApiError::bad_request(format!("Appwrite returned invalid JSON: {err}"))
+        })
     }
 }
 
@@ -258,114 +285,48 @@ pub async fn import_project(
             stats.databases += 1;
         }
 
-        let collections = collect(
+        // Appwrite serves tables and legacy collections from the same store, so
+        // both listings return the same resources. Import the TablesDB listing
+        // first and skip IDs it already covered, so nothing lands twice.
+        let tables = collect_optional(
             &remote,
-            &format!("/databases/{database_id}/collections"),
-            "collections",
+            &format!("/tablesdb/{database_id}/tables"),
+            "tables",
         )
         .await?;
-        for collection in &collections {
-            let collection_id = collection
-                .get("$id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    ApiError::bad_request("Appwrite returned a collection without an ID")
-                })?;
-            let exists: Option<String> = sqlx::query_scalar(
-                "select id from ow_collections where project_id = $1 and database_id = $2 and id = $3",
+        for table in tables.iter().flatten() {
+            truncated |= import_table(
+                &remote,
+                &writer,
+                &project_id,
+                database_id,
+                table,
+                max_documents,
+                &mut stats,
             )
-            .bind(&project_id)
-            .bind(database_id)
-            .bind(collection_id)
-            .fetch_optional(&writer)
             .await?;
-            if exists.is_none() {
-                let name = collection
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or(collection_id);
-                let attributes = collection
-                    .get("attributes")
-                    .map(sanitize_attributes)
-                    .unwrap_or_default();
-                stats.skipped_attributes += attributes.1;
-                let collection_permissions = collection
-                    .get("$permissions")
-                    .cloned()
-                    .unwrap_or_else(|| json!([]));
-                let document_security = collection
-                    .get("documentSecurity")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
-                let attributes = serde_json::to_value(&attributes.0)?;
-                store::create_collection(
+        }
+
+        // Only fall back to collections when the source has no TablesDB API.
+        // Keys scoped for TablesDB usually cannot read legacy collections.
+        if tables.is_none() {
+            let collections = collect(
+                &remote,
+                &format!("/databases/{database_id}/collections"),
+                "collections",
+            )
+            .await?;
+            for collection in &collections {
+                truncated |= import_collection(
+                    &remote,
                     &writer,
                     &project_id,
                     database_id,
-                    Some(collection_id.to_string()),
-                    name.to_string(),
-                    attributes,
-                    Some(&collection_permissions),
-                    document_security,
+                    collection,
+                    max_documents,
+                    &mut stats,
                 )
                 .await?;
-                stats.collections += 1;
-            }
-
-            let mut offset = 0i64;
-            loop {
-                if stats.documents as u64 >= max_documents {
-                    truncated = true;
-                    break;
-                }
-                let path = format!(
-                    "/databases/{database_id}/collections/{collection_id}/documents?limit=100&offset={offset}"
-                );
-                let page = remote.get(&path).await?;
-                let documents = page
-                    .get("documents")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let total = page.get("total").and_then(Value::as_i64).unwrap_or(0);
-                if documents.is_empty() {
-                    break;
-                }
-                for document in &documents {
-                    if stats.documents as u64 >= max_documents {
-                        truncated = true;
-                        break;
-                    }
-                    let Some(id) = document.get("$id").and_then(Value::as_str) else {
-                        stats.skipped_documents += 1;
-                        continue;
-                    };
-                    let data = document_data(document);
-                    let permissions = permissions(document);
-                    let created = parse_ts(document.get("$createdAt"));
-                    let updated = parse_ts(document.get("$updatedAt"));
-                    let inserted = store::import_document(
-                        &writer,
-                        &project_id,
-                        database_id,
-                        collection_id,
-                        id,
-                        &data,
-                        &permissions,
-                        created,
-                        updated,
-                    )
-                    .await?;
-                    if inserted {
-                        stats.documents += 1;
-                    } else {
-                        stats.skipped_documents += 1;
-                    }
-                }
-                offset += documents.len() as i64;
-                if offset >= total {
-                    break;
-                }
             }
         }
     }
@@ -382,9 +343,27 @@ pub async fn import_project(
             .get("status")
             .and_then(Value::as_bool)
             .unwrap_or(true);
-        let created = parse_ts(user.get("$createdAt"));
+        let prefs = user.get("prefs").cloned().unwrap_or_else(|| json!({}));
+        let email_verified = user
+            .get("emailVerification")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // Appwrite never exposes password hashes: imported users need a reset.
-        match store::import_user(&writer, &project_id, id, email, name, None, created, status).await
+        match store::import_user(
+            &writer,
+            &project_id,
+            id,
+            email,
+            name,
+            None,
+            &prefs,
+            email_verified,
+            status,
+            parse_ts(user.get("registration")),
+            parse_ts(user.get("$createdAt")),
+            parse_ts(user.get("$updatedAt")),
+        )
+        .await
         {
             Ok(true) => stats.users += 1,
             Ok(false) => stats.skipped_users += 1,
@@ -400,14 +379,244 @@ pub async fn import_project(
     })))
 }
 
-async fn collect(remote: &Remote<'_>, path: &str, key: &str) -> ApiResult<Vec<Value>> {
+async fn import_table(
+    remote: &Remote<'_>,
+    writer: &PgPool,
+    project_id: &str,
+    database_id: &str,
+    table: &Value,
+    max_documents: u64,
+    stats: &mut Stats,
+) -> ApiResult<bool> {
+    let table_id = table
+        .get("$id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_request("Appwrite returned a table without an ID"))?;
+    let exists: Option<String> = sqlx::query_scalar(
+        "select id from ow_collections where project_id = $1 and database_id = $2 and id = $3",
+    )
+    .bind(project_id)
+    .bind(database_id)
+    .bind(table_id)
+    .fetch_optional(writer)
+    .await?;
+    if exists.is_none() {
+        let columns = match table.get("columns") {
+            Some(columns) => columns.clone(),
+            None => remote
+                .get(&format!("/tablesdb/{database_id}/tables/{table_id}"))
+                .await?
+                .get("columns")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        };
+        let name = table
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(table_id);
+        let attributes = sanitize_attributes(&columns);
+        stats.skipped_attributes += attributes.1;
+        let permissions = table
+            .get("$permissions")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let row_security = table
+            .get("rowSecurity")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        store::create_collection(
+            writer,
+            project_id,
+            database_id,
+            Some(table_id.to_string()),
+            name.to_string(),
+            serde_json::to_value(&attributes.0)?,
+            Some(&permissions),
+            row_security,
+        )
+        .await?;
+        stats.tables += 1;
+    }
+
+    import_items(
+        remote,
+        writer,
+        project_id,
+        database_id,
+        table_id,
+        &format!("/tablesdb/{database_id}/tables/{table_id}/rows"),
+        "rows",
+        true,
+        max_documents,
+        stats,
+    )
+    .await
+}
+
+async fn import_collection(
+    remote: &Remote<'_>,
+    writer: &PgPool,
+    project_id: &str,
+    database_id: &str,
+    collection: &Value,
+    max_documents: u64,
+    stats: &mut Stats,
+) -> ApiResult<bool> {
+    let collection_id = collection
+        .get("$id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_request("Appwrite returned a collection without an ID"))?;
+    let exists: Option<String> = sqlx::query_scalar(
+        "select id from ow_collections where project_id = $1 and database_id = $2 and id = $3",
+    )
+    .bind(project_id)
+    .bind(database_id)
+    .bind(collection_id)
+    .fetch_optional(writer)
+    .await?;
+    if exists.is_none() {
+        let name = collection
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(collection_id);
+        let attributes = collection
+            .get("attributes")
+            .map(sanitize_attributes)
+            .unwrap_or_default();
+        stats.skipped_attributes += attributes.1;
+        let permissions = collection
+            .get("$permissions")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let document_security = collection
+            .get("documentSecurity")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        store::create_collection(
+            writer,
+            project_id,
+            database_id,
+            Some(collection_id.to_string()),
+            name.to_string(),
+            serde_json::to_value(&attributes.0)?,
+            Some(&permissions),
+            document_security,
+        )
+        .await?;
+        stats.collections += 1;
+    }
+
+    import_items(
+        remote,
+        writer,
+        project_id,
+        database_id,
+        collection_id,
+        &format!("/databases/{database_id}/collections/{collection_id}/documents"),
+        "documents",
+        false,
+        max_documents,
+        stats,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn import_items(
+    remote: &Remote<'_>,
+    writer: &PgPool,
+    project_id: &str,
+    database_id: &str,
+    collection_id: &str,
+    path: &str,
+    page_key: &str,
+    count_as_rows: bool,
+    max_documents: u64,
+    stats: &mut Stats,
+) -> ApiResult<bool> {
+    let mut offset = 0i64;
+    loop {
+        if stats.imported_items() >= max_documents {
+            return Ok(true);
+        }
+        let page = remote
+            .get(&format!("{path}?limit=100&offset={offset}"))
+            .await?;
+        let items = page
+            .get(page_key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let total = page.get("total").and_then(Value::as_i64).unwrap_or(0);
+        if items.is_empty() {
+            return Ok(false);
+        }
+        for item in &items {
+            if stats.imported_items() >= max_documents {
+                return Ok(true);
+            }
+            let Some(id) = item.get("$id").and_then(Value::as_str) else {
+                stats.skipped_documents += 1;
+                continue;
+            };
+            let inserted = store::import_document(
+                writer,
+                project_id,
+                database_id,
+                collection_id,
+                id,
+                &document_data(item),
+                &permissions(item),
+                parse_ts(item.get("$createdAt")),
+                parse_ts(item.get("$updatedAt")),
+            )
+            .await?;
+            if !inserted {
+                stats.skipped_documents += 1;
+            } else if count_as_rows {
+                stats.rows += 1;
+            } else {
+                stats.documents += 1;
+            }
+        }
+        offset += items.len() as i64;
+        if offset >= total {
+            return Ok(false);
+        }
+    }
+}
+
+async fn collect(
+    remote: &Remote<'_>,
+    path: &str,
+    key: &str,
+) -> ApiResult<Vec<Value>> {
+    collect_optional(remote, path, key)
+        .await?
+        .ok_or_else(|| ApiError::bad_request(format!("Appwrite returned 404 for {path}")))
+}
+
+/// None means the source has no such endpoint (older Appwrite).
+async fn collect_optional(
+    remote: &Remote<'_>,
+    path: &str,
+    key: &str,
+) -> ApiResult<Option<Vec<Value>>> {
     let mut out = Vec::new();
     let mut offset = 0i64;
     loop {
         let separator = if path.contains('?') { '&' } else { '?' };
         let page = remote
-            .get(&format!("{path}{separator}limit=100&offset={offset}"))
+            .get_optional(&format!("{path}{separator}limit=100&offset={offset}"))
             .await?;
+        let Some(page) = page else {
+            if offset == 0 {
+                return Ok(None);
+            }
+            return Err(ApiError::bad_request(format!(
+                "Appwrite returned 404 for {path}"
+            )));
+        };
         let items = page
             .get(key)
             .and_then(Value::as_array)
@@ -420,27 +629,37 @@ async fn collect(remote: &Remote<'_>, path: &str, key: &str) -> ApiResult<Vec<Va
             break;
         }
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 #[derive(Default)]
 struct Stats {
     databases: usize,
     collections: usize,
+    tables: usize,
     documents: usize,
+    rows: usize,
     users: usize,
     skipped_attributes: usize,
     skipped_documents: usize,
     skipped_users: usize,
 }
 
+impl Stats {
+    fn imported_items(&self) -> u64 {
+        (self.documents + self.rows) as u64
+    }
+}
+
 impl serde::Serialize for Stats {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("Stats", 7)?;
+        let mut state = serializer.serialize_struct("Stats", 9)?;
         state.serialize_field("databases", &self.databases)?;
         state.serialize_field("collections", &self.collections)?;
+        state.serialize_field("tables", &self.tables)?;
         state.serialize_field("documents", &self.documents)?;
+        state.serialize_field("rows", &self.rows)?;
         state.serialize_field("users", &self.users)?;
         state.serialize_field("skippedAttributes", &self.skipped_attributes)?;
         state.serialize_field("skippedDocuments", &self.skipped_documents)?;

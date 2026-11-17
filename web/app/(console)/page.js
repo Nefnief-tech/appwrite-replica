@@ -120,7 +120,7 @@ export default function OverviewPage() {
               </div>
             ))}
             {nodes.length === 0 ? (
-              <Empty title="No nodes registered">Add a follower to build redundancy.</Empty>
+              <Empty title="No nodes registered">Add a follower to build redundancy</Empty>
             ) : null}
           </div>
         </section>
@@ -159,7 +159,7 @@ export default function OverviewPage() {
                   </Link>
                 }
               >
-                Openwrite serves one Appwrite project per project ID.
+                Openwrite serves one Appwrite project per project ID
               </Empty>
             ) : null}
           </div>
@@ -178,7 +178,7 @@ export default function OverviewPage() {
           </span>
           <h3 style={{ marginTop: 14 }}>Create a project</h3>
           <p className="small subtle" style={{ margin: "4px 0 0" }}>
-            Get an API key and an Appwrite-compatible endpoint in seconds.
+            Get an API key and an Appwrite-compatible endpoint in seconds
           </p>
         </Link>
         <Link className="panel panel-pad" href="/import">
@@ -187,7 +187,7 @@ export default function OverviewPage() {
           </span>
           <h3 style={{ marginTop: 14 }}>Migrate from Appwrite Cloud</h3>
           <p className="small subtle" style={{ margin: "4px 0 0" }}>
-            Copy databases, collections, documents and users into Openwrite.
+            Copy databases, collections, documents and users into Openwrite
           </p>
         </Link>
         <Link className="panel panel-pad" href="/nodes">
@@ -196,7 +196,7 @@ export default function OverviewPage() {
           </span>
           <h3 style={{ marginTop: 14 }}>Add a replica</h3>
           <p className="small subtle" style={{ margin: "4px 0 0" }}>
-            Register followers, watch replication lag and promote on failover.
+            Register followers, watch replication lag and promote on failover
           </p>
         </Link>
       </div>

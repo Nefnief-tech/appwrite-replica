@@ -284,5 +284,16 @@ pub async fn delete_sessions(
     Ok((jar.add(cookie), StatusCode::NO_CONTENT))
 }
 
+/// A realtime-capable token for the current user session. Openwrite reuses the
+/// session token itself; the realtime endpoint validates it the same way.
+pub async fn create_jwt(State(state): State<AppState>, ctx: ApiCtx) -> ApiResult<Json<Value>> {
+    let user = ctx.require_user()?;
+    let token = ctx.session_token.clone().ok_or_else(|| {
+        ApiError::unauthorized("A user session is required to create a JWT")
+    })?;
+    rate_limit(&state, &format!("jwts:{}", user.id), 10).await?;
+    Ok(Json(json!({ "jwt": token })))
+}
+
 #[allow(dead_code)]
 fn _pool(_: PgPool) {}

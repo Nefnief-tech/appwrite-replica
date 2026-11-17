@@ -38,6 +38,48 @@ impl<'a> DocAccess<'a> {
     }
 }
 
+/// Publish a document change to the realtime hub via Postgres NOTIFY. The
+/// document is embedded when it fits the NOTIFY limit; deletes cannot be
+/// refetched, so they keep at least the permission list for ACL filtering.
+/// shortcut: documents over the 8 kB NOTIFY limit lose their payload, so a
+/// delete event then carries only the id and permissions; add tombstones if
+/// that matters.
+async fn notify_change(
+    pool: &PgPool,
+    collection: &CollectionRow,
+    document_id: &str,
+    event: &str,
+    document: Option<&Value>,
+) {
+    let mut change = serde_json::json!({
+        "project": collection.project_id,
+        "database": collection.database_id,
+        "collection": collection.id,
+        "document": document_id,
+        "event": event,
+        "permissions": document
+            .and_then(|document| document.get("$permissions"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new())),
+        "payload": document,
+    });
+    let mut payload = change.to_string();
+    if payload.len() >= 7000 {
+        change.as_object_mut().map(|change| change.remove("payload"));
+        payload = change.to_string();
+        if payload.len() >= 7000 {
+            return;
+        }
+    }
+    let result = sqlx::query("select pg_notify('ow_docs', $1)")
+        .bind(&payload)
+        .execute(pool)
+        .await;
+    if let Err(err) = result {
+        tracing::debug!("could not publish realtime change: {err}");
+    }
+}
+
 #[derive(Clone, Debug)]
 enum BindValue {
     Text(String),
@@ -247,6 +289,63 @@ fn parse_arg(arg: &str) -> Value {
     serde_json::from_str(arg).unwrap_or_else(|_| Value::String(arg.trim_matches('"').to_string()))
 }
 
+fn unwrap_query_value(value: Value) -> Value {
+    match value {
+        Value::Array(mut values) if values.len() == 1 => values.remove(0),
+        other => other,
+    }
+}
+
+/// Modern SDKs send each query as a JSON object instead of the legacy
+/// `equal("field", ["value"])` string. Normalise it for the single parser.
+fn json_query_to_legacy(raw: &str) -> ApiResult<String> {
+    let query: Value = serde_json::from_str(raw)
+        .map_err(|_| query_error(format!("Invalid query '{raw}'")))?;
+    let method = query
+        .get("method")
+        .and_then(Value::as_str)
+        .ok_or_else(|| query_error(format!("Query '{raw}' has no method")))?;
+    let attribute = query.get("attribute").and_then(Value::as_str);
+    let values = query
+        .get("values")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    match method {
+        "limit" | "offset" => {
+            let value = values
+                .first()
+                .ok_or_else(|| query_error(format!("Query '{method}' needs a value")))?;
+            Ok(format!("{method}({value})"))
+        }
+        "select" => Ok("select()".to_string()),
+        "orderAsc" | "orderDesc" => {
+            let attribute = attribute
+                .ok_or_else(|| query_error(format!("Query '{method}' needs an attribute")))?;
+            Ok(format!(
+                "{method}({})",
+                serde_json::to_string(attribute).unwrap_or_else(|_| "\"\"".to_string())
+            ))
+        }
+        "isNull" | "isNotNull" => {
+            let attribute = attribute
+                .ok_or_else(|| query_error(format!("Query '{method}' needs an attribute")))?;
+            Ok(format!(
+                "{method}({})",
+                serde_json::to_string(attribute).unwrap_or_else(|_| "\"\"".to_string())
+            ))
+        }
+        _ => {
+            let attribute = attribute.unwrap_or("");
+            Ok(format!(
+                "{method}({}, {})",
+                serde_json::to_string(attribute).unwrap_or_else(|_| "\"\"".to_string()),
+                Value::Array(values)
+            ))
+        }
+    }
+}
+
 fn parse_queries(
     collection: &CollectionRow,
     raw_queries: &[(String, String)],
@@ -277,6 +376,14 @@ fn parse_queries(
             }
             _ => continue,
         }
+
+        let normalized;
+        let value = if value.starts_with('{') {
+            normalized = json_query_to_legacy(value)?;
+            normalized.as_str()
+        } else {
+            value
+        };
 
         let Some(open) = value.find('(') else {
             return Err(query_error(format!("Invalid query '{value}'")));
@@ -327,7 +434,7 @@ fn parse_queries(
                     .as_str()
                     .ok_or_else(|| query_error(format!("{name} expects an attribute name")))?;
                 let field = resolve_field(collection, field)?;
-                let value = parse_arg(arg(1)?);
+                let value = unwrap_query_value(parse_arg(arg(1)?));
                 let op = match name {
                     "equal" => FilterOp::Equal,
                     "notEqual" => FilterOp::NotEqual,
@@ -637,7 +744,7 @@ pub async fn create_document(
             err.into()
         }
     })?;
-    Ok(document_json(
+    let document = document_json(
         &row.id,
         &collection.database_id,
         &collection.id,
@@ -645,7 +752,9 @@ pub async fn create_document(
         &row.permissions,
         row.created_at,
         row.updated_at,
-    ))
+    );
+    notify_change(pool, collection, &row.id, "create", Some(&document)).await;
+    Ok(document)
 }
 
 pub async fn update_document(
@@ -682,7 +791,7 @@ pub async fn update_document(
     .bind(&new_permissions)
     .fetch_one(pool)
     .await?;
-    Ok(document_json(
+    let document = document_json(
         &row.id,
         &collection.database_id,
         &collection.id,
@@ -690,7 +799,9 @@ pub async fn update_document(
         &row.permissions,
         row.created_at,
         row.updated_at,
-    ))
+    );
+    notify_change(pool, collection, document_id, "update", Some(&document)).await;
+    Ok(document)
 }
 
 pub async fn delete_document(
@@ -710,6 +821,15 @@ pub async fn delete_document(
     if !doc_allowed(collection, &existing.permissions, "delete", access) {
         return Err(ApiError::forbidden("You do not have permission to delete this document"));
     }
+    let document = document_json(
+        &existing.id,
+        &collection.database_id,
+        &collection.id,
+        &existing.data,
+        &existing.permissions,
+        existing.created_at,
+        existing.updated_at,
+    );
     sqlx::query(&format!(
         "delete from {} where id = $1",
         physical_path(&collection.project_id, &collection.database_id, &collection.id)
@@ -717,6 +837,7 @@ pub async fn delete_document(
     .bind(document_id)
     .execute(pool)
     .await?;
+    notify_change(pool, collection, document_id, "delete", Some(&document)).await;
     Ok(())
 }
 

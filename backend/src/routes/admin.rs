@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, RawQuery, State},
+    extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -24,6 +24,7 @@ use crate::{
     },
     nodes::{check_single, load_registry, lazy_pool, save_leader, verify_writable},
     store,
+    usage,
 };
 
 fn admin_json(admin: &AdminRow) -> Value {
@@ -203,6 +204,22 @@ pub async fn add_node(
     if !matches!(role, "leader" | "follower") {
         return Err(ApiError::bad_request("Node role must be leader or follower"));
     }
+    let dsn_hint = dsn_hint(&body.dsn);
+    let id = insert_node(&state, name, &body.dsn, role).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "name": name, "role": role, "dsnHint": dsn_hint })),
+    ))
+}
+
+/// Shared by manual registration and Docker provisioning so both paths validate,
+/// encrypt and reload the registry identically.
+pub(crate) async fn insert_node(
+    state: &AppState,
+    name: &str,
+    dsn: &str,
+    role: &str,
+) -> ApiResult<Uuid> {
     if role == "leader" {
         let leaders: i64 =
             sqlx::query_scalar("select count(*) from ow_nodes where role = 'leader'")
@@ -213,11 +230,11 @@ pub async fn add_node(
                 "A leader already exists. Promote an existing follower instead.",
             ));
         }
-        let pool = lazy_pool(&body.dsn, 4).map_err(|err| ApiError::bad_request(err.to_string()))?;
+        let pool = lazy_pool(dsn, 4).map_err(|err| ApiError::bad_request(err.to_string()))?;
         verify_writable(&pool).await?;
     }
     let id = Uuid::new_v4();
-    let encrypted = state.cipher().encrypt(&body.dsn)?;
+    let encrypted = state.cipher().encrypt(dsn)?;
     sqlx::query("insert into ow_nodes (id, name, dsn, role) values ($1, $2, $3, $4)")
         .bind(id)
         .bind(name)
@@ -233,19 +250,11 @@ pub async fn add_node(
             }
         })?;
     if role == "leader" {
-        save_leader(state.cfg(), state.cipher(), &body.dsn)
+        save_leader(state.cfg(), state.cipher(), dsn)
             .map_err(|err| ApiError::internal(format!("could not save leader file: {err}")))?;
     }
-    reload_registry(&state).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "id": id,
-            "name": name,
-            "role": role,
-            "dsnHint": dsn_hint(&body.dsn),
-        })),
-    ))
+    reload_registry(state).await?;
+    Ok(id)
 }
 
 pub async fn remove_node(
@@ -255,6 +264,11 @@ pub async fn remove_node(
 ) -> ApiResult<impl IntoResponse> {
     let id = Uuid::parse_str(&node_id)
         .map_err(|_| ApiError::bad_request("Invalid node ID"))?;
+    delete_node(&state, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn delete_node(state: &AppState, id: Uuid) -> ApiResult<()> {
     if state.nodes().read().await.writer_id == id {
         return Err(ApiError::bad_request(
             "The active leader cannot be removed. Promote another node first.",
@@ -267,8 +281,8 @@ pub async fn remove_node(
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("Node not found"));
     }
-    reload_registry(&state).await?;
-    Ok(StatusCode::NO_CONTENT)
+    reload_registry(state).await?;
+    Ok(())
 }
 
 pub async fn check_node(
@@ -899,6 +913,19 @@ pub async fn delete_document(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct UsageParams {
+    days: Option<u32>,
+}
+
+pub async fn usage(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Query(params): Query<UsageParams>,
+) -> ApiResult<Json<Value>> {
+    usage::aggregate(state, params.days.unwrap_or(7)).await
 }
 
 #[allow(dead_code)]

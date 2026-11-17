@@ -112,9 +112,13 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-openwrite-dev-admin}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       READ_ROUTING: ${READ_ROUTING:-replica}
+      DOCKER_REPLICA_MODE: network
+      DOCKER_NETWORK: openwrite_default
       RUST_LOG: openwrite_api=info,tower_http=warn
     volumes:
       - api-data:/data
+      # Console-admin-only feature: spawning replicas requires Docker Engine access.
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8080:8080"
 

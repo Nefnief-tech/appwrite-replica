@@ -142,7 +142,7 @@ const databases = new Databases(client);`;
             <div>
               <h3>Rotate API key</h3>
               <p className="small subtle" style={{ margin: "2px 0 0" }}>
-                Invalidates the current server key immediately.
+                Invalidates the current server key immediately
               </p>
             </div>
             <button className="btn btn-sm" onClick={() => setRotateOpen(true)}>
@@ -176,7 +176,7 @@ const databases = new Databases(client);`;
             ))}
             {(!data.databases || data.databases.length === 0) ? (
               <Empty title="No databases">
-                Create a database, then add collections and documents.
+                Create a database, then add collections and documents
               </Empty>
             ) : null}
           </div>
@@ -201,7 +201,7 @@ const databases = new Databases(client);`;
       {newDb ? (
         <Modal
           title="New database"
-          subtitle="Creates a real PostgreSQL schema named ow_<project>_<database>."
+          subtitle="Creates a real PostgreSQL schema named ow_<project>_<database>"
           onClose={() => setNewDb(false)}
           footer={
             <>
@@ -248,7 +248,7 @@ const databases = new Databases(client);`;
       {rotateOpen ? (
         <Modal
           title="Rotate API key?"
-          subtitle="Any server integration using the old key will start failing."
+          subtitle="Any server integration using the old key will start failing"
           onClose={() => setRotateOpen(false)}
           footer={
             <>
@@ -273,7 +273,7 @@ const databases = new Databases(client);`;
       {rotated ? (
         <Modal
           title="New API key"
-          subtitle="Copy it now — it cannot be retrieved later."
+          subtitle="Copy it now — it cannot be retrieved later"
           onClose={() => setRotated(null)}
           footer={
             <button className="btn btn-primary" onClick={() => setRotated(null)}>

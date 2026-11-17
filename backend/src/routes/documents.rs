@@ -14,7 +14,7 @@ use crate::{
     store,
 };
 
-fn query_pairs(raw: Option<String>) -> Vec<(String, String)> {
+pub(crate) fn query_pairs(raw: Option<String>) -> Vec<(String, String)> {
     raw.map(|q| {
         url::form_urlencoded::parse(q.as_bytes())
             .map(|(k, v)| (k.into_owned(), v.into_owned()))

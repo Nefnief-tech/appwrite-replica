@@ -259,6 +259,15 @@ pub async fn list_users(
     Ok((total, rows))
 }
 
+pub async fn find_project(pool: &PgPool, id: &str) -> ApiResult<Option<ProjectRow>> {
+    Ok(sqlx::query_as::<_, ProjectRow>(
+        "select id, name, api_key_hash, api_key_prefix, created_at, updated_at from ow_projects where id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 pub async fn find_user_by_email(
     pool: &PgPool,
     project_id: &str,
@@ -640,6 +649,7 @@ pub async fn delete_collection(
 }
 
 
+#[allow(clippy::too_many_arguments)]
 pub async fn import_user(
     pool: &PgPool,
     project_id: &str,
@@ -647,8 +657,12 @@ pub async fn import_user(
     email: &str,
     name: &str,
     hashed_password: Option<String>,
-    created_at: chrono::DateTime<Utc>,
+    prefs: &Value,
+    email_verified: bool,
     status: bool,
+    registration: chrono::DateTime<Utc>,
+    created_at: chrono::DateTime<Utc>,
+    updated_at: chrono::DateTime<Utc>,
 ) -> ApiResult<bool> {
     let email = normalize_email(email)?;
     let id = match id.filter(|v| validate_resource_id(v, "User ID").is_ok()) {
@@ -656,8 +670,8 @@ pub async fn import_user(
         None => generate_id(),
     };
     let result = sqlx::query(
-        "insert into ow_users (id, project_id, email, name, password_hash, prefs, status, imported, registration, password_update, created_at, updated_at)
-         values ($1, $2, $3, $4, $5, '{}'::jsonb, $6, true, $7, $7, $7, $7)
+        "insert into ow_users (id, project_id, email, name, password_hash, prefs, status, imported, email_verified, registration, password_update, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $9, $10, $11)
          on conflict do nothing",
     )
     .bind(&id)
@@ -665,8 +679,12 @@ pub async fn import_user(
     .bind(&email)
     .bind(name)
     .bind(hashed_password)
+    .bind(prefs)
     .bind(status)
+    .bind(email_verified)
+    .bind(registration)
     .bind(created_at)
+    .bind(updated_at)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)

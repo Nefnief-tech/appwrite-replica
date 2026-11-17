@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { api, formatDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
+import ProjectFromJson from "@/components/project-from-json";
 import {
   CopyRow,
   Empty,
@@ -20,6 +21,7 @@ import {
 export default function ProjectsPage() {
   const { data, loading, error, reload } = useApi("/projects");
   const [open, setOpen] = useState(false);
+  const [jsonOpen, setJsonOpen] = useState(false);
   const [name, setName] = useState("");
   const [id, setId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -50,18 +52,30 @@ export default function ProjectsPage() {
   return (
     <>
       <PageHead
-        eyebrow="Workspace"
         title="Projects"
-        description="Each project gets its own Appwrite project ID, API key, users and logical databases."
+        description="Each project gets its own Appwrite project ID, API key, users and logical databases"
         actions={
-          <button className="btn btn-primary" onClick={() => setOpen(true)}>
-            <Icon name="plus" size={14} />
-            New project
-          </button>
+          <>
+            <button className="btn" onClick={() => setJsonOpen(true)}>
+              <Icon name="import" size={14} />
+              From JSON
+            </button>
+            <button className="btn btn-primary" onClick={() => setOpen(true)}>
+              <Icon name="plus" size={14} />
+              New project
+            </button>
+          </>
         }
       />
 
       {error ? <Notice tone="danger">{error.message}</Notice> : null}
+
+      {jsonOpen ? (
+        <ProjectFromJson
+          onClose={() => setJsonOpen(false)}
+          onCreated={() => reload()}
+        />
+      ) : null}
 
       <section className="panel">
         <div className="panel-head">
@@ -126,7 +140,7 @@ export default function ProjectsPage() {
       {open ? (
         <Modal
           title="New project"
-          subtitle="Appwrite project IDs are lowercase and unique across your instance."
+          subtitle="Appwrite project IDs are lowercase and unique across your instance"
           onClose={() => setOpen(false)}
           footer={
             <>

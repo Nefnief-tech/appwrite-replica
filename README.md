@@ -10,7 +10,17 @@ from Appwrite Cloud or self-hosted Appwrite.
 - **API** — Rust (Axum, SQLx), Appwrite-compatible `/v1` routes
 - **Storage** — PostgreSQL; one schema per logical database, one table per collection
 - **Sessions** — Redis-backed httpOnly cookies, Argon2 password hashes
-- **Console** — Next.js admin UI for projects, users, data, nodes and imports
+- **Console** — Next.js admin UI for projects, users, data, usage, nodes and imports
+- **Usage dashboards** — the API records one event per `/v1` request (project, route
+  template, status, latency, origin, client, user agent) into `ow_request_events`. The
+  console's **Usage** page graphs requests over time, error rate, latency, top projects,
+  routes, clients and where users come from (origins + account signups). Events older
+  than `USAGE_RETENTION_DAYS` are pruned every 6 hours
+- **Project manifests** — Projects → **From JSON** sets up a whole project from one JSON
+  file: databases, collections, attributes, permissions and documents (paste or file-drop,
+  validation with a per-step log, re-runs skip what already exist). A bare `collections`
+  array at the top level goes into one database named `Main`. Enough to move a project
+  over by exporting its data as JSON instead of using the Appwrite import.
 - **Deploy** — Docker Compose stack with a primary, two replicas, Redis, API and web
 
 ## Quickstart
@@ -83,6 +93,7 @@ cd web && npm run build
 | `COOKIE_SAMESITE` | `lax` | `lax`, `strict` or `none` |
 | `READ_ROUTING` | `leader` | `leader` or `replica` |
 | `IMPORT_MAX_DOCUMENTS` | `100000` | Per-import document cap |
+| `USAGE_RETENTION_DAYS` | `30` | How long request events are kept |
 
 Control tables are prefixed `ow_` (`ow_projects`, `ow_users`, `ow_databases`,
 `ow_collections`, `ow_nodes`, `ow_admins`). Everything a collection stores lives in a real
@@ -114,6 +125,10 @@ Implemented:
 - Databases and collections: list, create, get, delete
 - Attributes: string, integer, float, boolean, email, url, ip, datetime, enum — create and delete
 - Documents: list, create, get, patch, delete
+- TablesDB: list/create/get/delete `tablesdb/{db}/tables` and columns, plus row
+  list/create/get/update/delete and `PUT` upsert. Rows are documents; `queries[]`
+  accepts both the legacy `equal("field", ["value"])` strings and the modern JSON
+  query objects.
 - Document queries: `limit`, `offset`, `orderAsc`, `orderDesc`, `equal`, `notEqual`, `lessThan`,
   `lessThanEqual`, `greaterThan`, `greaterThanEqual`, `search`, `startsWith`, `endsWith`,
   `isNull`, `isNotNull`
@@ -121,7 +136,20 @@ Implemented:
   `update`, `delete` variants and the legacy `write` alias. API keys bypass ACL checks;
   collection-level and document-level security are both honored.
 
-Not implemented yet: buckets, teams, messaging, functions, realtime, relationships, spatial
+- Realtime: `GET /v1/realtime` WebSocket with Appwrite's protocol. Connect with
+  `?project=<id>` (session cookie, `?jwt=`, `?token=` or an `authentication` message), then
+  send `subscribe` / `unsubscribe` messages or legacy `channels[]` query parameters.
+  Channels cover `documents`, `documents.<collection>`, per-document channels,
+  `databases.<db>.collections.<col>.documents` and the TablesDB equivalents
+  (`databases.<db>.tables.<table>.rows`, `tablesdb.<db>.tables.<table>.rows`) with `*`
+  wildcards and `.create`/`.update`/`.delete` filters. Events include `events`, `channels`,
+  `timestamp`, `payload` and `subscriptions`; each event carries both the modern TablesDB
+  name and the legacy documents name. Equal/comparison/null/contains/and/or realtime queries
+  are applied server-side. Row create/update/delete fan out through Postgres
+  `LISTEN/NOTIFY` and each event is re-checked against the collection or row read ACL for
+  the viewer.
+
+Not implemented yet: buckets, teams, messaging, functions, relationships, spatial
 attributes, transactions, GraphQL, password recovery emails.
 
 ## Nodes and failover
@@ -158,14 +186,42 @@ Console → **Import**, or `POST /admin/api/import` with:
 }
 ```
 
-The source key needs databases, collections, documents and users scopes. Imports copy
-databases, collections, supported attributes, documents (original IDs, data, ACLs, timestamps)
-and users. Existing IDs are skipped, so a failed run can be retried; the document cap marks the
-run truncated.
+The source key needs `databases.read`, `tables.read`, `rows.read` and `users.read` scopes;
+Appwrite before 1.8 also needs `collections.read` and `documents.read`. Imports copy
+databases, TablesDB tables and legacy collections, supported columns/attributes, rows and
+documents (original IDs, data, ACLs, timestamps) and users. The TablesDB listing is
+authoritative; collections are only read when the source has no TablesDB API. Existing IDs
+are skipped, so a failed run can be retried; the document cap marks the run truncated.
 
 **Passwords cannot be imported.** Appwrite never exposes password hashes, so imported users are
 created with `password_hash = NULL` and flagged `imported`. They cannot sign in until an admin
 sets a password in the console.
+
+## Spawning replicas from the console
+
+Console → **Nodes → Spawn replica** starts a `postgres:17-alpine` container, seeds it with
+`pg_basebackup` from the current leader, waits until it is streaming, and registers it as a
+follower. Removing a Docker-managed node also removes its container. The API talks to the local
+Docker Engine over `/var/run/docker.sock`; `GET /admin/api/docker/status` reports availability.
+
+Configuration:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Engine socket path |
+| `DOCKER_REPLICA_MODE` | `host` | `host` publishes a random loopback port; `network` uses container DNS only |
+| `DOCKER_NETWORK` | `openwrite_default` | user-defined network for new replicas (must resolve the leader) |
+| `DOCKER_REPLICA_HOST` | `127.0.0.1` | host used in the registered DSN (`host` mode) |
+| `DOCKER_LEADER_HOST` | leader DSN host | hostname replicas use to reach the leader |
+| `DOCKER_LEADER_PORT` | leader DSN port | port replicas use to reach the leader |
+
+The leader must accept replication connections from the replica network (for example
+`host replication openwrite all scram-sha-256` in `pg_hba.conf`). `compose.yaml` enables
+`network` mode and mounts the socket into the api service.
+
+**Security:** Docker socket access is host-root-equivalent. Anyone with admin console access can
+spawn and remove containers on that host. Keep the console behind authenticated, trusted access;
+do not expose it publicly with this feature enabled.
 
 ## Repository layout
 

@@ -18,6 +18,21 @@ pub struct Config {
     pub cookie_samesite: String,
     pub read_routing: ReadRouting,
     pub import_max_documents: u64,
+    pub usage_retention_days: u32,
+    pub docker_socket: PathBuf,
+    pub docker_replica_mode: DockerReplicaMode,
+    pub docker_network: String,
+    pub docker_replica_host: String,
+    pub docker_leader_host: Option<String>,
+    pub docker_leader_port: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockerReplicaMode {
+    /// Publish a random localhost port and connect to it from the API host.
+    Host,
+    /// Attach to the API's Docker network and connect by container name.
+    Network,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +99,29 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(100_000),
+            usage_retention_days: env::var("USAGE_RETENTION_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+            docker_socket: PathBuf::from(
+                env::var("DOCKER_SOCKET").unwrap_or_else(|_| "/var/run/docker.sock".into()),
+            ),
+            docker_replica_mode: match env::var("DOCKER_REPLICA_MODE")
+                .unwrap_or_else(|_| "host".into())
+                .as_str()
+            {
+                "host" => DockerReplicaMode::Host,
+                "network" => DockerReplicaMode::Network,
+                other => anyhow::bail!("DOCKER_REPLICA_MODE must be host or network, got {other}"),
+            },
+            docker_network: env::var("DOCKER_NETWORK")
+                .unwrap_or_else(|_| "openwrite_default".into()),
+            docker_replica_host: env::var("DOCKER_REPLICA_HOST")
+                .unwrap_or_else(|_| "127.0.0.1".into()),
+            docker_leader_host: env::var("DOCKER_LEADER_HOST").ok(),
+            docker_leader_port: env::var("DOCKER_LEADER_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         })
     }
 }

@@ -51,3 +51,9 @@ pub async fn version() -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
+
+pub async fn ping() -> Json<Value> {
+    Json(json!({
+        "code": 200,
+    }))
+}
