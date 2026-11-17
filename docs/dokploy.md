@@ -1,6 +1,6 @@
 # Deploying with Dokploy
 
-The repository ships a Dokploy-specific Compose file: `compose.dokploy.yaml`. It runs the whole
+The repository ships a Dokploy-specific Compose file: `compose.dokploy.yml`. It runs the whole
 stack (Postgres leader + two replicas, Redis, API, web) as **one Compose service** on the external
 `dokploy-network`, with no host ports. Dokploy's Traefik and Domains tab handle public access.
 
@@ -8,7 +8,7 @@ stack (Postgres leader + two replicas, Redis, API, web) as **one Compose service
 
 1. In Dokploy, create a Project, then **Create Service → Compose**.
 2. Set the provider to your Git provider, choose this repository and branch, and set
-   **Compose Path** to `compose.dokploy.yaml` (or paste the file with the Raw provider).
+   **Compose Path** to `compose.dokploy.yml` (or paste the file with the Raw provider).
 3. In the service's **Environment** tab, add the variables below, Save, then Deploy.
 4. Once healthy, open the **Domains** tab, add a domain for the `web` service on port **3000**,
    enable HTTPS (Let's Encrypt), and point `PUBLIC_URL` at that `https://` URL.
@@ -47,7 +47,7 @@ containers on the Dokploy host. Spawned replicas join `DOCKER_NETWORK` and are r
 container name. **Docker socket access is host-root-equivalent**: anyone with admin console access
 can manage containers on the host. Keep the admin account and domain access restricted.
 
-If you do not want that capability, remove the socket mount from `compose.dokploy.yaml` and use
+If you do not want that capability, remove the socket mount from `compose.dokploy.yml` and use
 the manual **Register node** flow instead; `/admin/api/docker/status` will report Docker as
 unavailable and the UI will disable the button.
 
