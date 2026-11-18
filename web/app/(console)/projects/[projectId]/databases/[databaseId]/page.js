@@ -6,6 +6,7 @@ import { useState } from "react";
 
 import { api } from "@/lib/api";
 import { useApi, useToast } from "@/lib/hooks";
+import DatabaseGraph from "@/components/database-graph";
 import {
   Badge,
   Empty,
@@ -49,6 +50,7 @@ export default function DatabasePage() {
   );
   const { toast, notify } = useToast();
 
+  const [view, setView] = useState("table");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [id, setId] = useState("");
@@ -140,7 +142,27 @@ export default function DatabasePage() {
       <section className="panel">
         <div className="panel-head">
           <h2>Collections</h2>
-          <span className="mono">{collections.data?.total ?? 0} total</span>
+          <div className="row" style={{ gap: 8 }}>
+            <span className="mono">{collections.data?.total ?? 0} total</span>
+            <div className="btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${view === "table" ? "btn-primary" : ""}`}
+                onClick={() => setView("table")}
+                aria-pressed={view === "table"}
+              >
+                <Icon name="overview" size={13} /> Table
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${view === "graph" ? "btn-primary" : ""}`}
+                onClick={() => setView("graph")}
+                aria-pressed={view === "graph"}
+              >
+                <Icon name="nodes" size={13} /> Graph
+              </button>
+            </div>
+          </div>
         </div>
 
         {collections.error ? (
@@ -160,6 +182,12 @@ export default function DatabasePage() {
           >
             Collections define attributes and create a real table with JSONB document data
           </Empty>
+        ) : view === "graph" ? (
+          <DatabaseGraph
+            databaseName={database?.name || databaseId}
+            collections={collections.data.collections}
+            basePath={`/projects/${projectId}/databases/${databaseId}/collections`}
+          />
         ) : (
           <div className="list">
             {collections.data.collections.map((collection) => (
