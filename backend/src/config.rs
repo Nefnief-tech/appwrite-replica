@@ -13,6 +13,12 @@ pub struct Config {
     pub node_secret: String,
     pub admin_email: String,
     pub admin_password: String,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_user: String,
+    pub smtp_password: String,
+    pub smtp_from: String,
+    pub smtp_tls: bool,
     pub cors_origins: Vec<String>,
     pub cookie_secure: bool,
     pub cookie_samesite: String,
@@ -89,6 +95,18 @@ impl Config {
             node_secret: env::var("NODE_SECRET").unwrap_or_else(|_| session_secret.clone()),
             admin_email: env::var("ADMIN_EMAIL").context("ADMIN_EMAIL is required")?,
             admin_password: env::var("ADMIN_PASSWORD").context("ADMIN_PASSWORD is required")?,
+            smtp_host: env::var("SMTP_HOST").unwrap_or_default(),
+            smtp_port: env::var("SMTP_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(587),
+            smtp_user: env::var("SMTP_USER").unwrap_or_default(),
+            smtp_password: env::var("SMTP_PASSWORD").unwrap_or_default(),
+            smtp_from: env::var("SMTP_FROM").unwrap_or_else(|_| "no-reply@openwrite.local".into()),
+            // 465 is implicit TLS, everything else uses STARTTLS
+            smtp_tls: env::var("SMTP_TLS")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or_else(|_| env::var("SMTP_PORT").map(|p| p == "465").unwrap_or(false)),
             cors_origins,
             cookie_secure: env::var("COOKIE_SECURE")
                 .map(|v| v == "true" || v == "1")

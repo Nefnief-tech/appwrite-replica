@@ -716,6 +716,172 @@ pub async fn import_document(
     Ok(result.rows_affected() > 0)
 }
 
+/// server-managed prefs (MFA state) that the public prefs endpoint preserves
+pub async fn set_reserved_pref(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+    key: &str,
+    value: Value,
+) -> ApiResult<()> {
+    let user = find_user(pool, project_id, user_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("User not found"))?;
+    let mut prefs = user.prefs;
+    if let Some(obj) = prefs.as_object_mut() {
+        obj.insert(key.to_string(), value);
+    }
+    update_user_prefs(pool, project_id, user_id, prefs).await?;
+    Ok(())
+}
+
+/// one-time email/challenge secret; only its hash is stored
+pub async fn create_auth_token(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+    kind: &str,
+    secret: &str,
+    ttl_seconds: i64,
+) -> ApiResult<uuid::Uuid> {
+    Ok(sqlx::query_scalar::<_, uuid::Uuid>(
+        "insert into ow_auth_tokens (project_id, user_id, kind, secret_hash, expires_at)
+         values ($1, $2, $3, $4, now() + ($5 || ' seconds')::interval)
+         returning id",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(sha256_hex(secret))
+    .bind(ttl_seconds.to_string())
+    .fetch_one(pool)
+    .await?)
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct AuthToken {
+    pub kind: String,
+    pub secret_hash: String,
+    pub expires_at: chrono::DateTime<Utc>,
+    pub used_at: Option<chrono::DateTime<Utc>>,
+}
+
+pub async fn get_auth_token(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+    id: uuid::Uuid,
+) -> ApiResult<Option<AuthToken>> {
+    Ok(sqlx::query_as::<_, AuthToken>(
+        "select kind, secret_hash, expires_at, used_at from ow_auth_tokens
+         where id = $1 and project_id = $2 and user_id = $3",
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn mark_auth_token_used(pool: &PgPool, id: uuid::Uuid) -> ApiResult<()> {
+    sqlx::query("update ow_auth_tokens set used_at = now() where id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn verify_email(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+) -> ApiResult<UserRow> {
+    sqlx::query_as::<_, UserRow>(
+        "update ow_users set email_verified = true, updated_at = now()
+         where project_id = $1 and id = $2 returning id, project_id, email, name, password_hash, prefs, status, imported, email_verified, registration, password_update, created_at, updated_at",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::not_found("User not found"))
+}
+
+/// atomically consume an unexpired secret
+pub async fn consume_auth_token(
+    pool: &PgPool,
+    project_id: &str,
+    user_id: &str,
+    kind: &str,
+    secret: &str,
+) -> ApiResult<bool> {
+    let row = sqlx::query_scalar::<_, uuid::Uuid>(
+        "update ow_auth_tokens set used_at = now()
+         where id = (
+           select id from ow_auth_tokens
+           where project_id = $1 and user_id = $2 and kind = $3 and secret_hash = $4
+             and used_at is null and expires_at > now()
+           order by created_at desc limit 1
+           for update skip locked
+         )
+         returning id",
+    )
+    .bind(project_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(sha256_hex(secret))
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct MailTemplate {
+    pub kind: String,
+    pub subject: String,
+    pub body: String,
+    pub html_body: String,
+    pub updated_at: chrono::DateTime<Utc>,
+}
+
+pub async fn get_mail_template(pool: &PgPool, kind: &str) -> ApiResult<Option<MailTemplate>> {
+    Ok(sqlx::query_as::<_, MailTemplate>(
+        "select kind, subject, body, html_body, updated_at from ow_mail_templates where kind = $1",
+    )
+    .bind(kind)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn list_mail_templates(pool: &PgPool) -> ApiResult<Vec<MailTemplate>> {
+    Ok(sqlx::query_as::<_, MailTemplate>(
+        "select kind, subject, body, html_body, updated_at from ow_mail_templates order by kind",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn set_mail_template(
+    pool: &PgPool,
+    kind: &str,
+    subject: &str,
+    body: &str,
+    html_body: &str,
+) -> ApiResult<()> {
+    sqlx::query(
+        "insert into ow_mail_templates (kind, subject, body, html_body) values ($1, $2, $3, $4)
+         on conflict (kind) do update set subject = excluded.subject, body = excluded.body,
+           html_body = excluded.html_body, updated_at = now()",
+    )
+    .bind(kind)
+    .bind(subject)
+    .bind(body)
+    .bind(html_body)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_email;

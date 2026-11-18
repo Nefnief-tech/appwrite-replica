@@ -10,7 +10,7 @@ pub mod users;
 
 use axum::{
     Router,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 
 use crate::realtime;
@@ -30,6 +30,16 @@ pub fn api_router() -> Router<AppState> {
         .route("/v1/account/password", patch(account::update_password))
         .route("/v1/account/prefs", get(account::get_prefs))
         .route("/v1/account/prefs", patch(account::update_prefs))
+        .route("/v1/account/recovery", post(account::create_recovery))
+        .route("/v1/account/recovery", put(account::update_recovery))
+        .route("/v1/account/verifications/email", post(account::create_verification))
+        .route("/v1/account/verifications/email", put(account::update_verification))
+        .route("/v1/account/mfa/factors", get(account::mfa_factors))
+        .route("/v1/account/mfa", patch(account::mfa_update))
+        .route("/v1/account/mfa/challenges", post(account::mfa_challenge_create))
+        .route("/v1/account/mfa/challenges", put(account::mfa_challenge_update))
+        .route("/v1/account/mfa/recovery-codes", get(account::mfa_recovery_codes_get))
+        .route("/v1/account/mfa/recovery-codes", post(account::mfa_recovery_codes_create))
         .route("/v1/account/sessions", get(account::list_sessions))
         .route("/v1/account/sessions", delete(account::delete_sessions))
         .route("/v1/account/sessions/email", post(account::login))
@@ -108,6 +118,9 @@ pub fn admin_router() -> Router<AppState> {
         .route("/overview", get(admin::overview))
         .route("/usage", get(admin::usage))
         .route("/nodes", get(admin::list_nodes))
+        .route("/mail", get(admin::mail_settings))
+        .route("/mail/templates", get(admin::list_mail_templates))
+        .route("/mail/templates", put(admin::update_mail_template))
         .route("/nodes", post(admin::add_node))
         .route("/nodes/{node_id}", delete(admin::remove_node))
         .route("/nodes/{node_id}/check", post(admin::check_node))

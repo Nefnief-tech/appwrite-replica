@@ -5,6 +5,7 @@ mod db;
 mod docker;
 mod documents;
 mod error;
+mod mailer;
 mod models;
 mod nodes;
 mod realtime;

@@ -181,6 +181,77 @@ pub async fn list_nodes(State(state): State<AppState>, _admin: AdminAuth) -> Jso
     }))
 }
 
+/// SMTP settings for the console. The password is never returned — only
+/// whether one is set. Values come from the server environment/.env.
+pub async fn mail_settings(State(state): State<AppState>, _admin: AdminAuth) -> Json<Value> {
+    let cfg = state.cfg();
+    Json(json!({
+        "configured": !cfg.smtp_host.is_empty(),
+        "host": cfg.smtp_host,
+        "port": cfg.smtp_port,
+        "user": cfg.smtp_user,
+        "from": cfg.smtp_from,
+        "tls": if cfg.smtp_tls { "implicit" } else { "starttls" },
+        "passwordSet": !cfg.smtp_password.is_empty(),
+    }))
+}
+
+pub async fn list_mail_templates(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+) -> ApiResult<Json<Value>> {
+    let rows = store::list_mail_templates(&state.writer().await).await?;
+    let templates = rows
+        .iter()
+        .map(|t| {
+            json!({
+                "kind": t.kind,
+                "subject": t.subject,
+                "body": t.body,
+                "html": t.html_body,
+                "updatedAt": crate::models::ts(t.updated_at),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({ "templates": templates })))
+}
+
+#[derive(Deserialize)]
+pub struct TemplateBody {
+    pub kind: String,
+    pub subject: String,
+    pub body: String,
+    #[serde(default)]
+    pub html: String,
+}
+
+pub async fn update_mail_template(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Json(body): Json<TemplateBody>,
+) -> ApiResult<Json<Value>> {
+    if !matches!(body.kind.as_str(), "recovery" | "verification" | "mfa") {
+        return Err(ApiError::bad_request("Unknown template kind"));
+    }
+    if body.subject.trim().is_empty() || body.body.trim().is_empty() {
+        return Err(ApiError::bad_request("Subject and body are required"));
+    }
+    store::set_mail_template(
+        &state.writer().await,
+        &body.kind,
+        &body.subject,
+        &body.body,
+        &body.html,
+    )
+    .await?;
+    Ok(Json(json!({
+        "kind": body.kind,
+        "subject": body.subject,
+        "body": body.body,
+        "html": body.html,
+    })))
+}
+
 #[derive(Deserialize)]
 pub struct AddNodeBody {
     pub name: String,

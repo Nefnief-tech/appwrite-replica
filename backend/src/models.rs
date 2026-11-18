@@ -111,6 +111,20 @@ pub fn attribute_json(attr: &Attribute) -> Value {
     Value::Object(obj)
 }
 
+/// MFA state lives under reserved prefs keys that the public prefs endpoint
+/// strips, so a client cannot switch its own second factor off.
+pub fn mfa_enabled(user: &UserRow) -> bool {
+    user.prefs.get("__mfa").and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub fn mfa_recovery_codes(user: &UserRow) -> Vec<String> {
+    user.prefs
+        .get("__mfaRecovery")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 pub fn user_json(user: &UserRow) -> Value {
     json!({
         "$id": user.id,
@@ -125,7 +139,7 @@ pub fn user_json(user: &UserRow) -> Value {
         "phone": "",
         "emailVerification": user.email_verified,
         "phoneVerification": false,
-        "mfa": false,
+        "mfa": mfa_enabled(user),
         "prefs": user.prefs,
         "targets": [],
     })
@@ -176,6 +190,8 @@ pub struct UserSession {
     pub email: String,
     pub created_at: DateTime<Utc>,
     pub expire_at: DateTime<Utc>,
+    #[serde(default)]
+    pub mfa_pending: bool,
 }
 
 pub fn session_json(session: &UserSession, current: bool) -> Value {

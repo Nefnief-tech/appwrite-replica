@@ -121,6 +121,12 @@ const ICONS = {
       <path d="m11 11 9-9M17 5l2 2M14.5 7.5l2 2" />
     </>
   ),
+  mail: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3.5 6.5 8.5 6 8.5-6" />
+    </>
+  ),
   dot: <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />,
   external: (
     <>

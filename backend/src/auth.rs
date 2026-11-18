@@ -269,6 +269,22 @@ impl FromRequestParts<AppState> for ApiCtx {
             }
         }
 
+        // a pending MFA session may only answer MFA calls (or cancel itself);
+        // clients detect the 401 type and open the second-factor step
+        if session.as_ref().is_some_and(|s| s.mfa_pending) {
+            let path = parts.uri.path();
+            let allowed = path.starts_with("/v1/account/mfa")
+                || (path.starts_with("/v1/account/sessions/")
+                    && parts.method == axum::http::Method::DELETE);
+            if !allowed {
+                return Err(ApiError::new(
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    "user_more_factors_required",
+                    "More factors required to complete sign in",
+                ));
+            }
+        }
+
         Ok(Self {
             project,
             is_api_key,
@@ -341,6 +357,7 @@ pub async fn create_user_session(
         email: email.to_string(),
         created_at: now,
         expire_at: now + Duration::days(365),
+        mfa_pending: false,
     };
     let key = session_key(project_id, &token);
     let digest = sha256_hex(&token);
@@ -369,6 +386,26 @@ pub async fn session_lookup(
     let mut conn = state.redis();
     let value: Option<String> = conn.get(session_key(project_id, token)).await?;
     Ok(value.and_then(|v| serde_json::from_str(&v).ok()))
+}
+
+/// flip a login session between "awaiting second factor" and fully signed in
+pub async fn set_session_mfa_pending(
+    state: &AppState,
+    project_id: &str,
+    token: &str,
+    pending: bool,
+) -> ApiResult<()> {
+    use redis::AsyncCommands;
+    let mut session = session_lookup(state, project_id, token)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("Session not found"))?;
+    session.mfa_pending = pending;
+    let payload = serde_json::to_string(&session)?;
+    let mut conn = state.redis();
+    let _: () = conn
+        .set_ex(session_key(project_id, token), payload, 365 * 24 * 60 * 60)
+        .await?;
+    Ok(())
 }
 
 pub async fn destroy_user_session(
